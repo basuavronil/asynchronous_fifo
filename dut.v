@@ -1,85 +1,69 @@
-module asy_fifo(
-  input rst, clk_wr, clk_rd, wr_en, rd_en,
-  input [7:0] din,
-  output reg [7:0] dout,
-  output empty, full 
-  );
-  reg [4:0] wr_ptr, rd_ptr, wr_gray_ptr, rd_gray_ptr, wr_gray_ptr_sync1, wr_gray_ptr_sync2, rd_gray_ptr_sync1, rd_gray_ptr_sync2; 
-  reg [7:0] fifomem [15:0];
-  integer i;
+// Corrected Asynchronous FIFO Module
+module async_fifo (
+    input clk_rd, clk_wr, wr_en, rd_en, rst,
+    input [7:0] d_in,
+    output empty, full,
+    output reg [7:0] d_out
+);
 
-  always@(posedge clk_wr or negedge rst)
-  begin
-  if (!rst) 
-  begin
-    wr_ptr <= 5'd0; wr_gray_ptr <= 5'd0;
-    for (i = 0; i < 16; i = i + 1)
-     fifomem[i] <= 8'd0;
-  end
-  else if (wr_en == 1 && !full)
-  begin
-    fifomem[wr_ptr[3:0]] <= din;
-    wr_ptr <= wr_ptr + 1;
-    wr_gray_ptr <= ((wr_ptr + 1) << 1 ^ (wr_ptr + 1));
-  end
-  end
- 
- 
+    reg [7:0] mem [0:15];
+    reg [4:0] rd_ptr, wr_ptr, gray_rd, gray_wr, syncff1_rd, syncff2_rd, syncff1_wr, syncff2_wr;
+
+    // 1. Write Domain Logic
+    always @(posedge clk_wr or negedge rst) begin
+        if (!rst) begin
+            wr_ptr  <= 5'd0;
+            gray_wr <= 5'd0;
+        end else if (wr_en && !full) begin
+            mem[wr_ptr[3:0]] <= d_in;
+            wr_ptr           <= wr_ptr + 1'b1;
+            // Correct Gray encoding: (bin >> 1) ^ bin
+            gray_wr          <= ((wr_ptr + 1'b1) >> 1) ^ (wr_ptr + 1'b1);
+        end
+    end
   
- always@(posedge clk_rd or negedge rst)
-  begin
-  if (!rst) 
-  begin
-    rd_ptr <= 5'd0;
-    rd_gray_ptr <= 3'd0;
-  end
-  else 
-  begin
-    if (rd_en == 1 && !empty)
-       begin
-          rd_ptr <= 5'd0;
-          rd_gray_ptr <= 5'd0;
-       end
-       else
-          dout <= fifomem[rd_ptr[3:0]];
-          rd_ptr <= rd_ptr + 1;
-          rd_gray_ptr <= (( rd_ptr + 1) << 1) ^ ( rd_ptr + 1);
-       end
-  end
-  
-  
-  
-  always@(posedge clk_rd or negedge rst)
-  begin
-  if (!rst) 
-   begin
-    wr_gray_ptr_sync1 <= 5'd0;
-    wr_gray_ptr_sync2 <= 5'd0;
-   end
-  else 
-   begin
-    wr_gray_ptr_sync1 <= wr_gray_ptr;
-    wr_gray_ptr_sync2 <= wr_gray_ptr_sync1;
-   end
-  end
-  
-  
-  
-  always@(posedge clk_wr or negedge rst)
-  begin
-  if (!rst) 
-   begin
-    rd_gray_ptr_sync1 <= 5'd0;
-    rd_gray_ptr_sync2 <= 5'd0;
-   end
-  else 
-   begin
-    rd_gray_ptr_sync1 <= rd_gray_ptr;
-    rd_gray_ptr_sync2 <= rd_gray_ptr_sync1;
-   end
-  end
-   
-  assign full = (wr_gray_ptr == {~rd_gray_ptr_sync2[4:3], rd_gray_ptr_sync2[2:0]});
-  assign empty = (wr_gray_ptr_sync2 == rd_gray_ptr);
-    
+    // 2. Synchronize Read Pointer into Write Domain (for FULL flag)
+    always @(posedge clk_wr or negedge rst) begin
+        if (!rst) begin
+            syncff1_rd <= 5'd0;
+            syncff2_rd <= 5'd0;
+        end else begin
+            syncff1_rd <= gray_rd;
+            syncff2_rd <= syncff1_rd;
+        end
+    end
+
+    // 3. Read Domain Logic
+    always @(posedge clk_rd or negedge rst) begin
+        if (!rst) begin
+            d_out   <= 8'd0;
+            rd_ptr  <= 5'd0;
+            gray_rd <= 5'd0;
+        end else if (rd_en && !empty) begin
+            d_out   <= mem[rd_ptr[3:0]];
+            rd_ptr  <= rd_ptr + 1'b1;
+            gray_rd <= ((rd_ptr + 1'b1) >> 1) ^ (rd_ptr + 1'b1);
+        end
+    end
+
+    // 4. Synchronize Write Pointer into Read Domain (for EMPTY flag)
+    always @(posedge clk_rd or negedge rst) begin
+        if (!rst) begin
+            syncff1_wr <= 5'd0;
+            syncff2_wr <= 5'd0;
+        end else begin
+            syncff1_wr <= gray_wr;
+            syncff2_wr <= syncff1_wr;
+        end
+    end
+
+    // -------------------------------------------------------------
+    // 5. Flag Generations using Synchronized Gray Pointers
+    // -------------------------------------------------------------
+    // FULL: Write Gray pointer matches Read Gray pointer with top 2 bits inverted
+    assign full  = (gray_wr == {~syncff2_rd[4:3], syncff2_rd[2:0]});
+
+    // EMPTY: Read Gray pointer matches synchronized Write Gray pointer
+    assign empty = (gray_rd == syncff2_wr);
+
 endmodule
